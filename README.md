@@ -3,6 +3,8 @@
 A configurable rate-limiting microservice deployed on Vercel. `POST /api/check` with a route and a client key and it tells you whether the request should be allowed or denied, based on rules stored in Postgres. Sliding-window counters live in Upstash (serverless Redis). A mock upstream endpoint is included to demo the full flow end-to-end.
 
 > **Live demo:** _add your Vercel URL here after `vercel --prod`_
+>
+> **Design doc:** [`docs/spec.md`](docs/spec.md) — the original spec that drove this build. Read it for the full architecture rationale and the day-by-day build plan.
 
 ---
 
