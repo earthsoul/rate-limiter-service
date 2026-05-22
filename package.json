@@ -1,0 +1,27 @@
+{
+  "name": "rate-limiter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A configurable rate limiting microservice on Vercel — sliding window counters in Upstash Redis, rules in Supabase Postgres.",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx --env-file=.env scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.3",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@vercel/node": "^3.2.29",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vercel": "^39.2.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
