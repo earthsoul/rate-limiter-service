@@ -1,3 +1,5 @@
+import type { ClientKeyType } from './types.js';
+
 /**
  * Returns true if `route` matches the glob-style `pattern`.
  *
@@ -43,4 +45,28 @@ export function specificity(pattern: string): number {
   if (firstStar === -1) return Number.MAX_SAFE_INTEGER;
   const hasDoubleStar = pattern.includes('**');
   return firstStar * 2 + (hasDoubleStar ? 0 : 1);
+}
+
+/**
+ * Parses a client key of the form "type:value" into its parts.
+ * Returns null if the input is malformed or the type is not recognised.
+ *
+ *   parseClientKey("ip:103.21.44.1")           → { type: 'ip', value: '103.21.44.1' }
+ *   parseClientKey("api_key:eyJhbGc:OiJIUz")  → { type: 'api_key', value: 'eyJhbGc:OiJIUz' }
+ *   parseClientKey("garbage")                  → null
+ *   parseClientKey(":missing-type")            → null
+ *   parseClientKey("ip:")                      → null
+ */
+export function parseClientKey(clientKey: string): { type: ClientKeyType; value: string } | null {
+  // Split on the FIRST colon only -- the value itself may contain colons (e.g. a JWT).
+  const idx = clientKey.indexOf(':');
+  if (idx <= 0 || idx === clientKey.length - 1) return null;
+
+  const type = clientKey.slice(0, idx);
+  const value = clientKey.slice(idx + 1);
+
+  // Narrow to ClientKeyType so callers get a typed result back.
+  if (type !== 'ip' && type !== 'api_key' && type !== 'user_id') return null;
+
+  return { type, value };
 }

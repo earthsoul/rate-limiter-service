@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { matches, specificity } from '../../lib/matcher.js';
+import { matches, parseClientKey, specificity } from '../../lib/matcher.js';
 
 const cases: Array<[pattern: string, route: string, expected: boolean]> = [
   ['/api/v1/search', '/api/v1/search', true], // exact
@@ -34,4 +34,20 @@ assert.deepEqual(ranked, ['/api/v1/search', '/api/v1/*', '/api/**'], 'exact > si
 assert.equal(specificity('/api/v1/search'), Number.MAX_SAFE_INTEGER, 'exact match maxed out');
 assert.ok(specificity('/api/v1/*') > specificity('/api/*'), 'longer literal prefix wins');
 assert.ok(specificity('/api/*') > specificity('/api/**'), 'single-star beats double-star at same position');
-console.log('\nAll specificity assertions passed.');
+console.log('\nAll specificity assertions passed.\n');
+
+// --- parseClientKey() --------------------------------------------------------
+assert.deepEqual(parseClientKey('ip:103.21.44.1'), { type: 'ip', value: '103.21.44.1' });
+assert.deepEqual(parseClientKey('user_id:abc123'), { type: 'user_id', value: 'abc123' });
+// JWT-style value contains a colon -- the value must be preserved intact.
+assert.deepEqual(
+  parseClientKey('api_key:eyJhbGc:OiJIUz'),
+  { type: 'api_key', value: 'eyJhbGc:OiJIUz' },
+  'split on first colon only'
+);
+// Garbage cases all return null.
+assert.equal(parseClientKey('garbage'), null, 'no colon');
+assert.equal(parseClientKey(':missing-type'), null, 'empty type');
+assert.equal(parseClientKey('ip:'), null, 'empty value');
+assert.equal(parseClientKey('unknown_type:foo'), null, 'unrecognised type');
+console.log('All parseClientKey assertions passed.');
