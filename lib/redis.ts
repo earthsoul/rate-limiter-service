@@ -126,3 +126,29 @@ export async function checkSlidingWindow(p: SlidingWindowParams): Promise<Slidin
     retryAfter,
   };
 }
+
+/**
+ * Read-only sibling of checkSlidingWindow: count current requests in the
+ * window WITHOUT recording a new one. Used by /api/stats so a status lookup
+ * doesn't itself consume a slot.
+ *
+ * Two-command pipeline = one HTTP round trip:
+ *   1. ZREMRANGEBYSCORE  evict stale entries (free housekeeping)
+ *   2. ZCARD             count what survives
+ */
+export async function getCurrentCount(
+  clientKey: string,
+  routePattern: string,
+  windowSeconds: number
+): Promise<number> {
+  const redis = getRedis();
+  const now = Date.now();
+  const cutoff = now - windowSeconds * 1000;
+  const key = buildKey(clientKey, routePattern);
+
+  const pipe = redis.pipeline();
+  pipe.zremrangebyscore(key, 0, cutoff);
+  pipe.zcard(key);
+  const results = (await pipe.exec()) as [number, number];
+  return results[1];
+}
