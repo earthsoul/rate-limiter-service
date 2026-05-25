@@ -62,7 +62,42 @@ function toRule(r: DbRule): Rule {
   };
 }
 
-// Exported for use by the query functions added in step 15+. Not part of the
-// public surface of this module (no caller outside lib/db.ts should need them).
+// Exported for use by the query functions below. Not part of the public
+// surface of this module (no caller outside lib/db.ts should need them).
 export { toRule };
 export type { DbRule };
+
+// -----------------------------------------------------------------------------
+// Query functions
+// -----------------------------------------------------------------------------
+
+/**
+ * Returns every row in the `rules` table, newest first.
+ * Used by the admin endpoint GET /api/rules.
+ */
+export async function listRules(): Promise<Rule[]> {
+  const sql = getSql();
+  const rows = await sql<DbRule[]>`
+    SELECT id, route_pattern, client_key_type, limit_count,
+           window_seconds, strategy, enabled, created_at
+    FROM rules
+    ORDER BY created_at DESC
+  `;
+  return rows.map(toRule);
+}
+
+/**
+ * Returns only rules where enabled = true, newest first.
+ * Used by /api/check on every request -- hits the idx_rules_enabled index.
+ */
+export async function listEnabledRules(): Promise<Rule[]> {
+  const sql = getSql();
+  const rows = await sql<DbRule[]>`
+    SELECT id, route_pattern, client_key_type, limit_count,
+           window_seconds, strategy, enabled, created_at
+    FROM rules
+    WHERE enabled = true
+    ORDER BY created_at DESC
+  `;
+  return rows.map(toRule);
+}
