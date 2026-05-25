@@ -16,14 +16,34 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 import checkHandler from '../../api/check.js';
+import mockHandler from '../../api/mock/[...path].js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
-type Handler = (req: IncomingMessage & { body?: unknown }, res: ServerResponse) => unknown | Promise<unknown>;
-
-const routes: Record<string, Handler> = {
-  '/api/check': checkHandler as unknown as Handler,
+type ExtendedRequest = IncomingMessage & {
+  body?: unknown;
+  query?: Record<string, string | string[]>;
 };
+type Handler = (req: ExtendedRequest, res: ServerResponse) => unknown | Promise<unknown>;
+
+// Resolve a URL pathname to a handler + any captured route params.
+// Mimics Vercel's file-system routing for the routes we care about.
+function resolveRoute(pathname: string):
+  | { handler: Handler; params: Record<string, string | string[]> }
+  | null {
+  if (pathname === '/api/check') {
+    return { handler: checkHandler as unknown as Handler, params: {} };
+  }
+  // /api/mock/[...path] -- catch-all, captures rest of URL as an array
+  if (pathname === '/api/mock' || pathname.startsWith('/api/mock/')) {
+    const rest = pathname.replace(/^\/api\/mock\/?/, '');
+    return {
+      handler: mockHandler as unknown as Handler,
+      params: { path: rest ? rest.split('/') : [] },
+    };
+  }
+  return null;
+}
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -61,11 +81,11 @@ function decorateResponse(res: ServerResponse) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
-  const handler = routes[url.pathname];
+  const resolved = resolveRoute(url.pathname);
 
   console.log(`${new Date().toISOString()}  ${req.method}  ${url.pathname}`);
 
-  if (!handler) {
+  if (!resolved) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ error: 'Not found', path: url.pathname }));
@@ -73,11 +93,12 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    const reqWithBody = req as IncomingMessage & { body?: unknown; query?: Record<string, string> };
+    const reqWithBody = req as ExtendedRequest;
     reqWithBody.body = await readJsonBody(req);
-    reqWithBody.query = Object.fromEntries(url.searchParams);
+    // Merge query string params with the captured route params (e.g. `path` from a catch-all).
+    reqWithBody.query = { ...Object.fromEntries(url.searchParams), ...resolved.params };
     decorateResponse(res);
-    await handler(reqWithBody, res);
+    await resolved.handler(reqWithBody, res);
   } catch (err) {
     console.error('handler error', err);
     if (!res.headersSent) {
