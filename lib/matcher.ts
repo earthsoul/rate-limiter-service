@@ -29,3 +29,18 @@ function patternToRegex(pattern: string): RegExp {
   // 5. Anchor so the WHOLE route must match, not a substring.
   return new RegExp(`^${regex}$`);
 }
+
+/**
+ * Numeric specificity score: higher = more specific.
+ * Used to pick a single winning rule when multiple patterns match the same route.
+ *
+ *   - Exact pattern (no `*`)            → MAX_SAFE_INTEGER (always wins)
+ *   - Longer literal prefix before `*`  → higher score
+ *   - At the same position, `*` beats `**`
+ */
+export function specificity(pattern: string): number {
+  const firstStar = pattern.indexOf('*');
+  if (firstStar === -1) return Number.MAX_SAFE_INTEGER;
+  const hasDoubleStar = pattern.includes('**');
+  return firstStar * 2 + (hasDoubleStar ? 0 : 1);
+}
