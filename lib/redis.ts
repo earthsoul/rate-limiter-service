@@ -47,9 +47,10 @@ export interface SlidingWindowParams {
 
 export interface SlidingWindowResult {
   allowed: boolean;
-  count: number;       // requests in the window AFTER recording this one
+  count: number;       // requests in the window AFTER recording this one (denied requests are not counted)
   remaining: number;   // limit - count, floored at 0
-  resetAt: number;     // unix seconds: conservative estimate (now + windowSeconds)
+  resetAt: number;     // unix seconds: when the next slot frees up
+  retryAfter?: number; // seconds to wait before retrying, only present on denials
 }
 
 /**
@@ -68,9 +69,10 @@ export interface SlidingWindowResult {
  * Each member is `<now>-<uuid>` so two requests in the same millisecond
  * don't collapse into one entry (sorted sets reject duplicate members).
  *
- * NOTE: this step only handles the happy path. On a denial the request is
- * still counted (we added it in step 2). Step 7 will back that out and
- * compute an accurate retryAfter from the oldest entry's score.
+ * On the allowed path we pay ONE HTTP round trip (the 4-command pipeline).
+ * On a denial we pay TWO -- the original pipeline plus a small follow-up
+ * that backs out our ZADD and reads the oldest entry's score so we can
+ * return an accurate retryAfter to the caller.
  */
 export async function checkSlidingWindow(p: SlidingWindowParams): Promise<SlidingWindowResult> {
   const redis = getRedis();
@@ -88,10 +90,39 @@ export async function checkSlidingWindow(p: SlidingWindowParams): Promise<Slidin
   const results = (await pipe.exec()) as [number, number, number, number];
   const count = results[2];
 
+  if (count <= p.limit) {
+    return {
+      allowed: true,
+      count,
+      remaining: Math.max(0, p.limit - count),
+      resetAt: Math.ceil((now + windowMs) / 1000),
+    };
+  }
+
+  // Denied. Back out our ZADD so denials don't consume window slots, and
+  // grab the oldest entry's score to compute when a slot will actually free up.
+  // Both commands batched into a single pipeline -> one extra round trip total.
+  const denyPipe = redis.pipeline();
+  denyPipe.zrem(key, member);
+  denyPipe.zrange(key, 0, 0, { withScores: true });
+  const denyResults = (await denyPipe.exec()) as [number, (string | number)[]];
+  const oldest = denyResults[1];
+
+  // Fall back to the full window if we can't read the oldest entry for any reason
+  // (e.g. another process just wiped the key). Conservative but safe.
+  let retryAfter = p.windowSeconds;
+  if (Array.isArray(oldest) && oldest.length >= 2) {
+    const oldestScore = Number(oldest[1]);
+    if (Number.isFinite(oldestScore)) {
+      retryAfter = Math.max(1, Math.ceil((oldestScore + windowMs - now) / 1000));
+    }
+  }
+
   return {
-    allowed: count <= p.limit,
-    count,
-    remaining: Math.max(0, p.limit - count),
-    resetAt: Math.ceil((now + windowMs) / 1000),
+    allowed: false,
+    count: count - 1, // we backed out our own entry, so the surviving count is one less
+    remaining: 0,
+    resetAt: Math.ceil((now + retryAfter * 1000) / 1000),
+    retryAfter,
   };
 }
