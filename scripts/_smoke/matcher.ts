@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict';
-import { matches, parseClientKey, specificity } from '../../lib/matcher.js';
+import { findBestRule, matches, parseClientKey, specificity } from '../../lib/matcher.js';
+import type { Rule } from '../../lib/types.js';
+
+function makeRule(overrides: Partial<Rule>): Rule {
+  return {
+    id: 'test',
+    routePattern: '/',
+    clientKeyType: 'ip',
+    limitCount: 10,
+    windowSeconds: 60,
+    strategy: 'sliding_window',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
 
 const cases: Array<[pattern: string, route: string, expected: boolean]> = [
   ['/api/v1/search', '/api/v1/search', true], // exact
@@ -50,4 +65,41 @@ assert.equal(parseClientKey('garbage'), null, 'no colon');
 assert.equal(parseClientKey(':missing-type'), null, 'empty type');
 assert.equal(parseClientKey('ip:'), null, 'empty value');
 assert.equal(parseClientKey('unknown_type:foo'), null, 'unrecognised type');
-console.log('All parseClientKey assertions passed.');
+console.log('All parseClientKey assertions passed.\n');
+
+// --- findBestRule() ----------------------------------------------------------
+
+// 1. Empty list -> null
+assert.equal(findBestRule([], '/api/v1/search', 'ip'), null, 'empty rules -> null');
+
+// 2. No rule matches the route -> null
+assert.equal(
+  findBestRule([makeRule({ routePattern: '/other' })], '/api/v1/search', 'ip'),
+  null,
+  'no pattern match -> null'
+);
+
+// 3. Multiple matching rules -> most specific wins
+const rules = [
+  makeRule({ id: 'broad', routePattern: '/api/**' }),
+  makeRule({ id: 'mid', routePattern: '/api/v1/*' }),
+  makeRule({ id: 'exact', routePattern: '/api/v1/search' }),
+];
+const winner = findBestRule(rules, '/api/v1/search', 'ip');
+assert.equal(winner?.id, 'exact', 'most specific should win');
+
+// 4. Disabled rules are skipped even if their pattern matches
+const onlyDisabled = [makeRule({ id: 'off', routePattern: '/api/v1/search', enabled: false })];
+assert.equal(findBestRule(onlyDisabled, '/api/v1/search', 'ip'), null, 'disabled rule must not win');
+
+// 5. Wrong client-key type is skipped (same pattern, different audience)
+const twoAudiences = [
+  makeRule({ id: 'for_ip', routePattern: '/api/**', clientKeyType: 'ip', limitCount: 100 }),
+  makeRule({ id: 'for_key', routePattern: '/api/**', clientKeyType: 'api_key', limitCount: 1000 }),
+];
+const ipWinner = findBestRule(twoAudiences, '/api/users', 'ip');
+const keyWinner = findBestRule(twoAudiences, '/api/users', 'api_key');
+assert.equal(ipWinner?.id, 'for_ip', 'ip request -> ip rule');
+assert.equal(keyWinner?.id, 'for_key', 'api_key request -> api_key rule');
+
+console.log('All findBestRule assertions passed.');

@@ -1,4 +1,4 @@
-import type { ClientKeyType } from './types.js';
+import type { ClientKeyType, Rule } from './types.js';
 
 /**
  * Returns true if `route` matches the glob-style `pattern`.
@@ -69,4 +69,23 @@ export function parseClientKey(clientKey: string): { type: ClientKeyType; value:
   if (type !== 'ip' && type !== 'api_key' && type !== 'user_id') return null;
 
   return { type, value };
+}
+
+/**
+ * Pick the single most-specific rule that applies to this request.
+ * A rule applies only if:
+ *   - it is enabled,
+ *   - its clientKeyType matches the request's client type, AND
+ *   - its routePattern matches the incoming route.
+ *
+ * Returns null when no rule applies (caller should treat as "allow by default").
+ *
+ * Filter THEN sort: if 1000 rules are in the DB and only 3 match, we
+ * only sort 3 items, not 1000.
+ */
+export function findBestRule(rules: Rule[], route: string, clientKeyType: ClientKeyType): Rule | null {
+  const matching = rules
+    .filter((r) => r.enabled && r.clientKeyType === clientKeyType && matches(r.routePattern, route))
+    .sort((a, b) => specificity(b.routePattern) - specificity(a.routePattern));
+  return matching[0] ?? null;
 }
