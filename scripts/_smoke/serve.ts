@@ -17,6 +17,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { URL } from 'node:url';
 import checkHandler from '../../api/check.js';
 import mockHandler from '../../api/mock/[...path].js';
+import rulesIdHandler from '../../api/rules/[id].js';
+import rulesIndexHandler from '../../api/rules/index.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -33,6 +35,18 @@ function resolveRoute(pathname: string):
   | null {
   if (pathname === '/api/check') {
     return { handler: checkHandler as unknown as Handler, params: {} };
+  }
+  // /api/rules -- list + create
+  if (pathname === '/api/rules') {
+    return { handler: rulesIndexHandler as unknown as Handler, params: {} };
+  }
+  // /api/rules/[id] -- single-segment dynamic param
+  const rulesIdMatch = pathname.match(/^\/api\/rules\/([^/]+)$/);
+  if (rulesIdMatch) {
+    return {
+      handler: rulesIdHandler as unknown as Handler,
+      params: { id: rulesIdMatch[1]! },
+    };
   }
   // /api/mock/[...path] -- catch-all, captures rest of URL as an array
   if (pathname === '/api/mock' || pathname.startsWith('/api/mock/')) {
