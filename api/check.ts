@@ -1,28 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { listEnabledRules } from '../lib/db.js';
 import { findBestRule, parseClientKey } from '../lib/matcher.js';
 import { checkSlidingWindow } from '../lib/redis.js';
-import type { CheckRequest, Rule } from '../lib/types.js';
-
-/**
- * TEMPORARY: rules will come from Postgres once lib/db.ts exists (step 17).
- * For now we hardcode one so we can prove the end-to-end wiring works
- * without dragging the DB layer in yet.
- *
- * Default rule: 5 requests per 30s, keyed by IP, against /api/test.
- * Matches the example in README's "Quick demo" section.
- */
-const HARDCODED_RULES: Rule[] = [
-  {
-    id: 'hardcoded-1',
-    routePattern: '/api/test',
-    clientKeyType: 'ip',
-    limitCount: 5,
-    windowSeconds: 30,
-    strategy: 'sliding_window',
-    enabled: true,
-    createdAt: '2026-01-01T00:00:00Z',
-  },
-];
+import type { CheckRequest } from '../lib/types.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 1. CORS preflight -- browsers send OPTIONS before non-simple POSTs.
@@ -50,8 +30,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // 5. Find the most-specific rule that applies (against hardcoded list for now).
-    const rule = findBestRule(HARDCODED_RULES, body.route, parsed.type);
+    // 5. Fetch all enabled rules from Postgres on every request.
+    //    Trade-off: ~5-15ms extra latency from fra1 to Supabase pooler
+    //    in fra1. Acceptable for demo/low-traffic; the natural next step
+    //    is an in-process TTL cache (30s) or Supabase Realtime
+    //    invalidation. Deferred -- see README "future work".
+    //
+    //    Hits idx_rules_enabled, returns only enabled rules; disabled
+    //    rules don't break traffic, they just stop being matched.
+    const rules = await listEnabledRules();
+    const rule = findBestRule(rules, body.route, parsed.type);
 
     // No rule matches -> allow by default. Lets teams opt-in routes to
     // rate limiting without breaking everything else they ship.

@@ -292,6 +292,7 @@ rate-limiter/
 
 ## Future work
 
+- **Cache the rules read in `/api/check`** — currently every request does one Postgres roundtrip to fetch enabled rules. The natural next step is an in-process TTL cache (e.g. 30s) in module scope, or a Supabase Realtime subscription that invalidates on rule changes. Deferred because (a) at demo traffic the ~10ms is fine, and (b) cache invalidation across many serverless instances is a worthwhile separate design conversation.
 - Authentication on the management API (JWT / API key)
 - Rate-limit bursting (temporary spikes above the steady-state limit)
 - Admin dashboard UI
