@@ -1,5 +1,5 @@
 import postgres from 'postgres';
-import type { ClientKeyType, Rule, Strategy } from './types.js';
+import type { ClientKeyType, CreateRuleInput, Rule, Strategy } from './types.js';
 
 // Module-level cache for the client. Same lazy/singleton pattern as getRedis().
 let _sql: ReturnType<typeof postgres> | null = null;
@@ -100,4 +100,70 @@ export async function listEnabledRules(): Promise<Rule[]> {
     ORDER BY created_at DESC
   `;
   return rows.map(toRule);
+}
+
+/**
+ * Look up a single rule by id. Returns null if no row matches.
+ *
+ * Returns null (not throws) for "not found" so callers can map it to a 404
+ * without try/catch. Real failures (connection lost, etc.) still throw.
+ *
+ * The ${id} interpolation is parameterised by Postgres -- never spliced into
+ * the query string -- so it's safe to pass user input directly.
+ */
+export async function getRule(id: string): Promise<Rule | null> {
+  const sql = getSql();
+  const rows = await sql<DbRule[]>`
+    SELECT id, route_pattern, client_key_type, limit_count,
+           window_seconds, strategy, enabled, created_at
+    FROM rules
+    WHERE id = ${id}
+    LIMIT 1
+  `;
+  if (rows.length === 0) return null;
+  return toRule(rows[0]!);
+}
+
+/**
+ * Insert a new rule and return it with its DB-generated id and created_at.
+ *
+ * Uses Postgres's RETURNING clause to get the new row back in the SAME
+ * roundtrip as the insert -- no separate SELECT, no race conditions.
+ *
+ * Optional fields fall back to JS-side defaults that match the column
+ * DEFAULTs in the schema (passing `${undefined}` would send NULL and
+ * violate the NOT NULL constraint).
+ */
+export async function createRule(input: CreateRuleInput): Promise<Rule> {
+  const sql = getSql();
+  const rows = await sql<DbRule[]>`
+    INSERT INTO rules (
+      route_pattern, client_key_type, limit_count,
+      window_seconds, strategy, enabled
+    )
+    VALUES (
+      ${input.routePattern},
+      ${input.clientKeyType},
+      ${input.limitCount},
+      ${input.windowSeconds},
+      ${input.strategy ?? 'sliding_window'},
+      ${input.enabled ?? true}
+    )
+    RETURNING id, route_pattern, client_key_type, limit_count,
+              window_seconds, strategy, enabled, created_at
+  `;
+  return toRule(rows[0]!);
+}
+
+/**
+ * Delete a rule by id. Returns true if a row was actually removed,
+ * false if no row matched (lets the API layer choose between 200 and 404).
+ */
+export async function deleteRule(id: string): Promise<boolean> {
+  const sql = getSql();
+  const result = await sql`
+    DELETE FROM rules
+    WHERE id = ${id}
+  `;
+  return result.count > 0;
 }
