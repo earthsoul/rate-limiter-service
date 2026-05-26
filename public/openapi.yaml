@@ -1,0 +1,419 @@
+openapi: 3.0.3
+
+info:
+  title: Rate Limiter as a Service
+  version: 1.0.0
+  description: |
+    A configurable rate-limiting microservice on Vercel.
+
+    - **Sliding-window counters** in [Upstash Redis](https://upstash.com/) (HTTP, serverless-friendly)
+    - **Rules** durably stored in [Supabase Postgres](https://supabase.com/)
+    - Deployed in `fra1` (Frankfurt) for EU latency
+
+    Click any endpoint, fill in the request body, and hit **Send** to call the live API.
+
+    [GitHub repo](https://github.com/earthsoul/rate-limiter-service) · [Design doc](https://github.com/earthsoul/rate-limiter-service/blob/main/docs/spec.md)
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://rate-limiter-service-j2lz.vercel.app
+    description: Production (fra1 — Frankfurt)
+
+tags:
+  - name: Rate limit
+    description: The core decision endpoint — "should this request be allowed?"
+  - name: Rules
+    description: CRUD for rate-limit rules. Changes take effect on the very next /api/check.
+  - name: Stats
+    description: Read your usage without spending quota.
+  - name: Mock
+    description: An echo upstream so you can demo the full flow without a real backend.
+
+paths:
+  /api/check:
+    post:
+      tags: [Rate limit]
+      summary: Decide whether a request should be allowed
+      description: |
+        Looks up the rule that governs the given route + client key type, runs
+        the sliding-window check in Redis, and returns an allow/deny decision
+        plus the standard `X-RateLimit-*` headers.
+
+        If no rule matches the route, returns `allowed: true, remaining: -1`
+        ("ungoverned") so you can stage rollouts without breaking anything.
+      operationId: check
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRequest'
+            example:
+              route: /api/test
+              clientKey: ip:198.51.100.42
+      responses:
+        '200':
+          description: Allowed.
+          headers:
+            X-RateLimit-Limit:
+              schema: { type: integer }
+              description: The configured limit for this rule.
+            X-RateLimit-Remaining:
+              schema: { type: integer }
+              description: Requests remaining in the current window.
+            X-RateLimit-Reset:
+              schema: { type: integer }
+              description: Unix-epoch (s) when the window resets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckResult'
+              example:
+                allowed: true
+                remaining: 4
+                limit: 5
+                windowSeconds: 30
+                resetAt: 1779784742
+        '400':
+          description: Malformed request body or `clientKey`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Rate limit exceeded.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds until the next allowed request (RFC 6585).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckResult' }
+              example:
+                allowed: false
+                remaining: 0
+                retryAfter: 28
+                message: Rate limit exceeded
+
+  /api/rules:
+    get:
+      tags: [Rules]
+      summary: List all rules
+      operationId: listRules
+      responses:
+        '200':
+          description: All rules, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rules]
+                properties:
+                  rules:
+                    type: array
+                    items: { $ref: '#/components/schemas/Rule' }
+    post:
+      tags: [Rules]
+      summary: Create a new rule
+      operationId: createRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRuleInput' }
+            example:
+              routePattern: /api/v1/*
+              clientKeyType: ip
+              limitCount: 100
+              windowSeconds: 60
+      responses:
+        '201':
+          description: Rule created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rule]
+                properties:
+                  rule: { $ref: '#/components/schemas/Rule' }
+        '400':
+          description: Validation failure (e.g. missing field, wrong type).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/rules/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: UUID of the rule.
+        schema:
+          type: string
+          format: uuid
+        example: 25a9e1e7-3c96-4e7e-be62-f93c1210b631
+    get:
+      tags: [Rules]
+      summary: Get a single rule by id
+      operationId: getRule
+      responses:
+        '200':
+          description: Rule found.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rule]
+                properties:
+                  rule: { $ref: '#/components/schemas/Rule' }
+        '400':
+          description: '`id` is not a valid UUID.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No rule with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [Rules]
+      summary: Delete a rule
+      operationId: deleteRule
+      responses:
+        '204':
+          description: Deleted (no body).
+        '400':
+          description: '`id` is not a valid UUID.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No rule with that id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/stats/{clientKey}:
+    get:
+      tags: [Stats]
+      summary: Read current usage without spending quota
+      description: |
+        Returns how much of its budget a client has spent in the current
+        window for a given route. Reads only — does **not** count as a request.
+
+        If no rule matches the route, returns `200` with sentinel values
+        (`requestCount: 0, limit: -1`) and a message.
+      operationId: getStats
+      parameters:
+        - name: clientKey
+          in: path
+          required: true
+          description: '`type:value` form, e.g. `ip:198.51.100.42`.'
+          schema:
+            type: string
+            pattern: '^(ip|api_key|user_id):.+$'
+          example: ip:198.51.100.42
+        - name: route
+          in: query
+          required: true
+          description: The route to look up usage for.
+          schema: { type: string }
+          example: /api/test
+      responses:
+        '200':
+          description: Current usage.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatsResult' }
+              example:
+                clientKey: ip:198.51.100.42
+                route: /api/test
+                routePattern: /api/test
+                windowSeconds: 30
+                requestCount: 3
+                limit: 5
+                remaining: 2
+                resetAt: 1779784762062
+        '400':
+          description: Malformed `clientKey` or missing `route`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/mock/{path}:
+    get:
+      tags: [Mock]
+      summary: Echo any request (mock upstream)
+      description: |
+        A stand-in for a real backend so the full rate-limit → upstream flow
+        can be demoed end-to-end. Echoes back the path, method, headers,
+        query, and body.
+      operationId: mockGet
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: Any path segment(s) — the catch-all captures everything after `/api/mock/`.
+          schema: { type: string }
+          example: hello/world
+      responses:
+        '200':
+          description: Echoed request details.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  path:    { type: string }
+                  method:  { type: string }
+                  timestamp: { type: string, format: date-time }
+                  headers: { type: object }
+                  query:   { type: object }
+                  body:    { type: object, nullable: true }
+    post:
+      tags: [Mock]
+      summary: Echo any request (POST variant)
+      operationId: mockPost
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+          example: hello/world
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: Echoed request details (same shape as GET).
+
+components:
+  schemas:
+    Rule:
+      type: object
+      required: [id, routePattern, clientKeyType, limitCount, windowSeconds, strategy, enabled, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 25a9e1e7-3c96-4e7e-be62-f93c1210b631
+        routePattern:
+          type: string
+          description: |
+            Glob pattern. `*` matches a single path segment, `**` matches any
+            number of characters.
+          example: /api/v1/*
+        clientKeyType:
+          type: string
+          enum: [ip, api_key, user_id]
+          example: ip
+        limitCount:
+          type: integer
+          minimum: 1
+          example: 100
+        windowSeconds:
+          type: integer
+          minimum: 1
+          example: 60
+        strategy:
+          type: string
+          enum: [sliding_window, fixed_window]
+          example: sliding_window
+        enabled:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateRuleInput:
+      type: object
+      required: [routePattern, clientKeyType, limitCount, windowSeconds]
+      properties:
+        routePattern:
+          type: string
+          example: /api/v1/*
+        clientKeyType:
+          type: string
+          enum: [ip, api_key, user_id]
+        limitCount:
+          type: integer
+          minimum: 1
+        windowSeconds:
+          type: integer
+          minimum: 1
+        strategy:
+          type: string
+          enum: [sliding_window, fixed_window]
+          default: sliding_window
+        enabled:
+          type: boolean
+          default: true
+
+    CheckRequest:
+      type: object
+      required: [route, clientKey]
+      properties:
+        route:
+          type: string
+          example: /api/test
+        clientKey:
+          type: string
+          description: '`type:value` form. `type` ∈ {`ip`, `api_key`, `user_id`}.'
+          pattern: '^(ip|api_key|user_id):.+$'
+          example: ip:198.51.100.42
+
+    CheckResult:
+      type: object
+      required: [allowed, remaining, limit, windowSeconds, resetAt]
+      properties:
+        allowed:      { type: boolean }
+        remaining:    { type: integer }
+        limit:        { type: integer }
+        windowSeconds: { type: integer }
+        resetAt:
+          type: integer
+          description: Unix epoch (s) when the window resets.
+        retryAfter:
+          type: integer
+          description: Only present on 429. Seconds until the next allowed request.
+        message:
+          type: string
+
+    StatsResult:
+      type: object
+      required: [clientKey, route, routePattern, windowSeconds, requestCount, limit, remaining, resetAt]
+      properties:
+        clientKey:    { type: string }
+        route:        { type: string }
+        routePattern:
+          type: string
+          nullable: true
+          description: '`null` when no rule matches.'
+        windowSeconds: { type: integer }
+        requestCount: { type: integer }
+        limit:        { type: integer }
+        remaining:    { type: integer }
+        resetAt:
+          type: integer
+          format: int64
+          description: Unix epoch (ms) when the window resets.
+        message:
+          type: string
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Short machine-readable code.
+          example: invalid_input
+        message:
+          type: string
+          description: Human-readable detail.
+          example: routePattern must be a non-empty string

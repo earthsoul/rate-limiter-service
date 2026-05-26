@@ -2,9 +2,11 @@
 
 A configurable rate-limiting microservice deployed on Vercel. `POST /api/check` with a route and a client key and it tells you whether the request should be allowed or denied, based on rules stored in Postgres. Sliding-window counters live in Upstash (serverless Redis). A mock upstream endpoint is included to demo the full flow end-to-end.
 
-> **Live demo:** [`https://rate-limiter-service-j2lz.vercel.app`](https://rate-limiter-service-j2lz.vercel.app) — deployed in `fra1` (Frankfurt), colocated with Upstash Redis and Supabase Postgres in EU. Try the [quick demo curls below](#quick-demo-copy-paste-curl).
+> **Live demo + interactive API docs:** [`https://rate-limiter-service-j2lz.vercel.app`](https://rate-limiter-service-j2lz.vercel.app) — Scalar-rendered OpenAPI 3.0 spec with "Try it" buttons that hit the real `fra1`-deployed API.
 >
 > **Design doc:** [`docs/spec.md`](docs/spec.md) — the original spec that drove this build. Read it for the full architecture rationale and the day-by-day build plan.
+>
+> **OpenAPI spec:** [`public/openapi.yaml`](public/openapi.yaml) — machine-readable description of every endpoint.
 
 ---
 
