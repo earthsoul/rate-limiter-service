@@ -38,9 +38,12 @@ export interface CheckResult {
 
 export interface StatsResult {
   clientKey: string;
+  route: string;
+  routePattern: string | null;
   windowSeconds: number;
   requestCount: number;
   limit: number;
   remaining: number;
   resetAt: number;
+  message?: string;
 }

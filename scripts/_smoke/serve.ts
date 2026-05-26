@@ -19,6 +19,7 @@ import checkHandler from '../../api/check.js';
 import mockHandler from '../../api/mock/[...path].js';
 import rulesIdHandler from '../../api/rules/[id].js';
 import rulesIndexHandler from '../../api/rules/index.js';
+import statsHandler from '../../api/stats/[clientKey].js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -46,6 +47,14 @@ function resolveRoute(pathname: string):
     return {
       handler: rulesIdHandler as unknown as Handler,
       params: { id: rulesIdMatch[1]! },
+    };
+  }
+  // /api/stats/[clientKey] -- clientKey may contain colons (ip:1.2.3.4), no slashes
+  const statsMatch = pathname.match(/^\/api\/stats\/([^/]+)$/);
+  if (statsMatch) {
+    return {
+      handler: statsHandler as unknown as Handler,
+      params: { clientKey: decodeURIComponent(statsMatch[1]!) },
     };
   }
   // /api/mock/[...path] -- catch-all, captures rest of URL as an array
