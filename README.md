@@ -2,7 +2,7 @@
 
 A configurable rate-limiting microservice deployed on Vercel. `POST /api/check` with a route and a client key and it tells you whether the request should be allowed or denied, based on rules stored in Postgres. Sliding-window counters live in Upstash (serverless Redis). A mock upstream endpoint is included to demo the full flow end-to-end.
 
-> **Live demo:** _add your Vercel URL here after `vercel --prod`_
+> **Live demo:** [`https://rate-limiter-service-j2lz.vercel.app`](https://rate-limiter-service-j2lz.vercel.app) — deployed in `fra1` (Frankfurt), colocated with Upstash Redis and Supabase Postgres in EU. Try the [quick demo curls below](#quick-demo-copy-paste-curl).
 >
 > **Design doc:** [`docs/spec.md`](docs/spec.md) — the original spec that drove this build. Read it for the full architecture rationale and the day-by-day build plan.
 
@@ -133,15 +133,12 @@ A mock upstream that echoes the request — used to demo the full flow end-to-en
 
 ## Quick demo (copy-paste curl)
 
+A rule for `/api/test` (5 requests per 30 s, keyed by IP) is already seeded on the live demo. Run these against it directly:
+
 ```bash
-BASE=https://your-project.vercel.app
+BASE=https://rate-limiter-service-j2lz.vercel.app
 
-# 1. Create a rule: 5 requests per 30 seconds, keyed by IP
-curl -s -X POST "$BASE/api/rules" \
-  -H "Content-Type: application/json" \
-  -d '{"routePattern":"/api/test","clientKeyType":"ip","limitCount":5,"windowSeconds":30,"strategy":"sliding_window"}'
-
-# 2. Check 6 times fast
+# Fire 6 requests fast -- first 5 allowed, 6th blocked.
 for i in 1 2 3 4 5 6; do
   curl -s -X POST "$BASE/api/check" \
     -H "Content-Type: application/json" \
@@ -149,8 +146,28 @@ for i in 1 2 3 4 5 6; do
   echo
 done
 
-# First 5 calls -> 200 { "allowed": true, "remaining": 4..0 }
-# 6th call     -> 429 { "allowed": false, "retryAfter": 28 }
+# Read current usage WITHOUT spending quota.
+curl -s "$BASE/api/stats/ip:123.45.67.89?route=%2Fapi%2Ftest"
+```
+
+Expected:
+
+```
+{ "allowed": true,  "remaining": 4, ... }
+{ "allowed": true,  "remaining": 3, ... }
+{ "allowed": true,  "remaining": 2, ... }
+{ "allowed": true,  "remaining": 1, ... }
+{ "allowed": true,  "remaining": 0, ... }
+{ "allowed": false, "retryAfter": 28, "message": "Rate limit exceeded" }
+{ "clientKey": "ip:123.45.67.89", "requestCount": 5, "limit": 5, ... }
+```
+
+To run against your own deployment instead, also POST a rule first:
+
+```bash
+curl -s -X POST "$BASE/api/rules" \
+  -H "Content-Type: application/json" \
+  -d '{"routePattern":"/api/test","clientKeyType":"ip","limitCount":5,"windowSeconds":30}'
 ```
 
 ---
